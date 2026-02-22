@@ -37,7 +37,9 @@ Sharp, direct, honest. Sound like a senior marketer who's seen it all — not a 
 **When a URL IS provided (site data will be injected into context):**
 STRUCTURE YOUR RESPONSE EXACTLY LIKE THIS:
 
-1. **First sentence: identify the business.** Say what the company appears to do based on the page content. e.g. "I pulled up [domain] — looks like you're a [type of business] serving [area/market]." If you can't tell, say so and ask them to describe their business.
+1. **First sentence: identify the business.** Read the page text carefully and say what the company appears to do. e.g. "I pulled up [domain] — looks like you're a [type of business] serving [area/market]."
+   - If the page text makes it genuinely unclear what the business does, DO NOT GUESS. Instead say: "I pulled up [domain] — and honestly, I couldn't tell from the homepage what your business actually does. That's a problem in itself — if I can't figure it out in 5 seconds, neither can a new visitor." Then proceed with the technical findings.
+   - Never describe a company as "consulting" unless the word consulting actually appears in their content.
 
 2. **Then give 3-4 specific data-point findings.** Be an analyst, not a copywriter. Use the ACTUAL values from the site data:
    - Quote the actual H1 text: "Your H1 is '[actual H1]' — that tells Google nothing about what you do or who you serve."
@@ -114,7 +116,7 @@ async function fetchSiteData(url) {
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 2500);
+      .slice(0, 4000);
 
     return {
       url,
@@ -149,7 +151,7 @@ function formatSiteContext(data) {
     `Analytics/GTM: ${(data.hasGA || data.hasGTM) ? "Yes" : "No — conversion tracking may be missing"}`,
     `Canonical tag: ${data.hasCanonical ? "Yes" : "No"}`,
     `Robots meta: ${data.metaRobots || "Not set"}`,
-    `Page text sample: ${data.bodyText.slice(0, 800)}`,
+    `Page text sample: ${data.bodyText.slice(0, 1500)}`,
     `[END SITE ANALYSIS — base your feedback ONLY on this data. Do not invent details not present here.]`
   ];
   return lines.join("\n");
