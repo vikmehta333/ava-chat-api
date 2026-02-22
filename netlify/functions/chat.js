@@ -38,7 +38,7 @@ exports.handler = async function(event) {
     return { statusCode: 405, body: "Method not allowed" };
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY || process.env.avachat;
   if (!apiKey) {
     return { statusCode: 500, body: JSON.stringify({ error: "API key not configured" }) };
   }
