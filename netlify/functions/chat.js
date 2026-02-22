@@ -74,21 +74,32 @@ function extractUrls(text) {
   return [...new Set(text.match(urlRegex) || [])];
 }
 
-async function fetchSiteData(url) {
+async function fetchSiteData(rawUrl) {
+  // Normalize: try www. if bare domain, follow redirects
+  let url = rawUrl;
+  if (!/^https?:\/\/www\./.test(url) && !/\.[a-z]{2,}(:\d+)?\//.test(url.replace(/^https?:\/\//,''))) {
+    // bare domain — try www. version first
+    url = url.replace(/^(https?:\/\/)/, '$1www.');
+  }
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 10000);
 
     const res = await fetch(url, {
       signal: controller.signal,
+      redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; AvaDigitalBot/1.0; +https://avadigitalagency.com)",
-        "Accept": "text/html,application/xhtml+xml",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
       },
     });
     clearTimeout(timeout);
 
     if (!res.ok) return { error: `Site returned ${res.status}` };
+    const contentType = res.headers.get("content-type") || "";
+    if (!contentType.includes("html")) return { error: "Site did not return HTML" };
 
     const html = await res.text();
 
@@ -110,6 +121,13 @@ async function fetchSiteData(url) {
     const ogTitle     = getTag(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
 
     // Strip HTML and get body text sample
+    // Detect Cloudflare challenge or empty JS-only shell
+    const isCfChallenge = /Just a moment|cf-browser-verification|Checking your browser/i.test(html);
+    const isJsShell = html.length < 3000 && !h1s.length && !title;
+    if (isCfChallenge || isJsShell) {
+      return { error: "Site uses bot protection or JavaScript rendering — content not accessible via server-side fetch. Inform the user you couldn't read their site directly and ask them to describe their business." };
+    }
+
     const bodyText = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
