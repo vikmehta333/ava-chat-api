@@ -74,103 +74,70 @@ function extractUrls(text) {
   return [...new Set(text.match(urlRegex) || [])];
 }
 
-async function fetchSiteData(rawUrl) {
-  // Normalize: try www. if bare domain, follow redirects
-  let url = rawUrl;
-  if (!/^https?:\/\/www\./.test(url) && !/\.[a-z]{2,}(:\d+)?\//.test(url.replace(/^https?:\/\//,''))) {
-    // bare domain — try www. version first
-    url = url.replace(/^(https?:\/\/)/, '$1www.');
-  }
+async function fetchSiteData(url) {
+  // Use Jina.ai reader — handles JS rendering, Cloudflare, redirects. Free tier.
+  const jinaUrl = `https://r.jina.ai/${url}`;
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
-    const res = await fetch(url, {
+    const res = await fetch(jinaUrl, {
       signal: controller.signal,
-      redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
+        "Accept": "text/plain",
+        "X-Return-Format": "markdown",
       },
     });
     clearTimeout(timeout);
 
-    if (!res.ok) return { error: `Site returned ${res.status}` };
-    const contentType = res.headers.get("content-type") || "";
-    if (!contentType.includes("html")) return { error: "Site did not return HTML" };
+    if (!res.ok) return { error: `Could not fetch site (${res.status})` };
 
-    const html = await res.text();
+    const text = await res.text();
+    if (!text || text.length < 100) return { error: "Site returned no readable content" };
 
-    // Extract key SEO elements
-    const getTag   = (pattern) => (html.match(pattern) || [])[1]?.trim() || null;
-    const getAllTags = (pattern) => [...html.matchAll(pattern)].map(m => m[1]?.replace(/<[^>]+>/g, '').trim()).filter(Boolean).slice(0, 5);
+    // Parse Jina's response format:
+    // Title: ...
+    // URL Source: ...
+    // Markdown Content:
+    // <content>
+    const titleMatch   = text.match(/^Title:\s*(.+)$/m);
+    const title        = titleMatch ? titleMatch[1].trim() : null;
+    const contentStart = text.indexOf("Markdown Content:");
+    const markdown     = contentStart >= 0 ? text.slice(contentStart + 18).trim() : text;
 
-    const title       = getTag(/<title[^>]*>([^<]+)<\/title>/i);
-    const metaDesc    = getTag(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)
-                     || getTag(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']description["']/i);
-    const h1s         = getAllTags(/<h1[^>]*>(.*?)<\/h1>/gis);
-    const h2s         = getAllTags(/<h2[^>]*>(.*?)<\/h2>/gis);
-    const hasSchema   = /<script[^>]*type=["']application\/ld\+json["']/i.test(html);
-    const hasGTM      = /GTM-[A-Z0-9]+/.test(html);
-    const hasGA       = /UA-\d+|G-[A-Z0-9]+|gtag\(/.test(html);
-    const hasCanonical= /<link[^>]*rel=["']canonical["']/i.test(html);
-    const hasSitemap  = /<loc>/i.test(html) || /sitemap/i.test(html);
-    const metaRobots  = getTag(/<meta[^>]*name=["']robots["'][^>]*content=["']([^"']+)["']/i);
-    const ogTitle     = getTag(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+    // Extract headings from markdown
+    const h1s = [...markdown.matchAll(/^#\s+(.+)$/gm)].map(m => m[1].trim()).slice(0, 3);
+    const h2s = [...markdown.matchAll(/^##\s+(.+)$/gm)].map(m => m[1].trim()).slice(0, 5);
 
-    // Strip HTML and get body text sample
-    // Detect Cloudflare challenge or empty JS-only shell
-    const isCfChallenge = /Just a moment|cf-browser-verification|Checking your browser/i.test(html);
-    const isJsShell = html.length < 3000 && !h1s.length && !title;
-    if (isCfChallenge || isJsShell) {
-      return { error: "Site uses bot protection or JavaScript rendering — content not accessible via server-side fetch. Inform the user you couldn't read their site directly and ask them to describe their business." };
-    }
+    // Check for tracking/schema signals in raw text
+    const hasAnalytics = /gtag|google-analytics|GTM-|_ga|fbq|hotjar/i.test(markdown);
+    const hasSchema    = /"@type"/i.test(markdown);
+    const hasLocPages  = /\/[a-z]+-[a-z]+(-[a-z]+)?\//i.test(url);
 
-    const bodyText = html
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 4000);
+    // Clean page summary (first 2000 chars of content)
+    const summary = markdown.replace(/!\[.*?\]\(.*?\)/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim().slice(0, 2000);
 
-    return {
-      url,
-      title,
-      metaDesc,
-      h1s,
-      h2s,
-      hasSchema,
-      hasGTM,
-      hasGA,
-      hasCanonical,
-      hasSitemap,
-      metaRobots,
-      ogTitle,
-      bodyText,
-    };
+    return { url, title, h1s, h2s, hasAnalytics, hasSchema, summary, raw: markdown.slice(0, 500) };
+
   } catch (err) {
     return { error: err.name === "AbortError" ? "Site took too long to respond" : err.message };
   }
 }
 
 function formatSiteContext(data) {
-  if (data.error) return `\n\n[SITE ANALYSIS: Could not fetch ${data.url} — ${data.error}. Do not speculate about the site. Tell the user you couldn't reach it and ask them to describe their business instead.]`;
-
+  if (data.error) {
+    return `\n\n[SITE ANALYSIS ERROR for ${data.url}: ${data.error}. Do not speculate about this site. Tell the user you had trouble reading their site and ask them to describe their business instead.]`;
+  }
   const lines = [
     `\n\n[SITE ANALYSIS for ${data.url}]`,
-    `Title tag: ${data.title || "MISSING"}`,
-    `Meta description: ${data.metaDesc || "MISSING"}`,
-    `H1 tags: ${data.h1s.length ? data.h1s.join(" | ") : "NONE FOUND"}`,
-    `H2 tags: ${data.h2s.length ? data.h2s.join(" | ") : "NONE FOUND"}`,
-    `Schema markup: ${data.hasSchema ? "Yes" : "No"}`,
-    `Analytics/GTM: ${(data.hasGA || data.hasGTM) ? "Yes" : "No — conversion tracking may be missing"}`,
-    `Canonical tag: ${data.hasCanonical ? "Yes" : "No"}`,
-    `Robots meta: ${data.metaRobots || "Not set"}`,
-    `Page text sample: ${data.bodyText.slice(0, 1500)}`,
-    `[END SITE ANALYSIS — base your feedback ONLY on this data. Do not invent details not present here.]`
+    `Page title: ${data.title || "MISSING"}`,
+    `H1 headings: ${data.h1s && data.h1s.length ? data.h1s.join(" | ") : "NONE FOUND"}`,
+    `H2 headings: ${data.h2s && data.h2s.length ? data.h2s.join(" | ") : "NONE FOUND"}`,
+    `Analytics/tracking: ${data.hasAnalytics ? "Detected" : "None detected — conversion tracking likely missing"}`,
+    `Schema markup: ${data.hasSchema ? "Detected" : "None detected"}`,
+    `Full page content (use this to identify what the business does and find specific issues):`,
+    data.summary || "(no content)",
+    `[END SITE DATA — base ALL findings on this data only. Do not invent anything not present above.]`,
   ];
   return lines.join("\n");
 }
