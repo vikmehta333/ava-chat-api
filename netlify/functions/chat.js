@@ -71,9 +71,17 @@ NEVER use phrases like "lack of clear messaging", "missed opportunity to engage"
 
 // ── Site Fetcher ───────────────────────────────────────────────────────────────
 function extractUrls(text) {
-  const urlRegex = /https?:\/\/[^\s<>"{}|\\^`[\]]+/gi;
-  return [...new Set(text.match(urlRegex) || [])];
+  // Match full URLs and bare domains (e.g. velocitylogicgroup.com)
+  const fullUrls    = text.match(/https?:\/\/[^\s<>"{}|\\^`[\]]+/gi) || [];
+  const bareDomains = text.match(/\b(?:www\.)?[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?(?:\/[^\s]*)?\b/g) || [];
+  const combined    = [...new Set([...fullUrls, ...bareDomains])];
+  // Normalize: add https:// if missing, filter out common non-domain words
+  return combined
+    .filter(u => /\.[a-zA-Z]{2,}/.test(u) && !/^(e\.g|i\.e|etc|vs|p\.s)\./.test(u))
+    .map(u => /^https?:\/\//i.test(u) ? u : 'https://' + u)
+    .slice(0, 1); // only process first URL found
 }
+
 
 async function fetchSiteData(url) {
   // Use Jina.ai reader — handles JS rendering, Cloudflare, redirects. Free tier.
