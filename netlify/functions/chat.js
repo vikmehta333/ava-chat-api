@@ -119,8 +119,12 @@ async function fetchSiteData(url) {
     const hasSchema    = /"@type"/i.test(markdown);
     const hasLocPages  = /\/[a-z]+-[a-z]+(-[a-z]+)?\//i.test(url);
 
-    // Clean page summary (first 2000 chars of content)
-    const summary = markdown.replace(/!\[.*?\]\(.*?\)/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim().slice(0, 2000);
+    // Extract meaningful content — skip nav/image lines, get real paragraphs
+    const cleanLines = markdown
+      .split('\n')
+      .map(l => l.replace(/!\[.*?\]\(.*?\)/g, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').trim())
+      .filter(l => l.length > 60 && !l.startsWith('#') && !l.startsWith('=') && !l.startsWith('-') && !/^[\[\](){}|*_`>0-9.\-!]/.test(l));
+    const summary = cleanLines.slice(0, 15).join('\n');
 
     return { url, title, h1s, h2s, hasAnalytics, hasSchema, summary, raw: markdown.slice(0, 500) };
 
