@@ -106,8 +106,13 @@ async function fetchSiteData(url) {
     const markdown     = contentStart >= 0 ? text.slice(contentStart + 18).trim() : text;
 
     // Extract headings from markdown
-    const h1s = [...markdown.matchAll(/^#\s+(.+)$/gm)].map(m => m[1].trim()).slice(0, 3);
-    const h2s = [...markdown.matchAll(/^##\s+(.+)$/gm)].map(m => m[1].trim()).slice(0, 5);
+    // Handle both ATX (# H) and setext (H\n=== or H\n---) heading styles
+    const atxH1   = [...markdown.matchAll(/^# (.+)$/gm)].map(m => m[1].trim());
+    const setextH1= [...markdown.matchAll(/^(.+)\n={3,}/gm)].map(m => m[1].trim()).slice(1); // skip first (=title)
+    const atxH2   = [...markdown.matchAll(/^## (.+)$/gm)].map(m => m[1].trim());
+    const setextH2= [...markdown.matchAll(/^(.+)\n-{3,}/gm)].map(m => m[1].trim());
+    const h1s = [...atxH1, ...setextH1].filter(h => h.length > 4 && h.length < 150).slice(0, 3);
+    const h2s = [...atxH2, ...setextH2].filter(h => h.length > 4 && h.length < 150).slice(0, 5);
 
     // Check for tracking/schema signals in raw text
     const hasAnalytics = /gtag|google-analytics|GTM-|_ga|fbq|hotjar/i.test(markdown);
