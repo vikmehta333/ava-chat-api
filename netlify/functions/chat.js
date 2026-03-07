@@ -70,7 +70,7 @@ NEVER use phrases like "lack of clear messaging", "missed opportunity to engage"
 - If asked about something outside marketing: "That's outside my lane. What's your biggest marketing challenge right now?"
 - Never make up information about a website. Only comment on what's in the site data provided.`;
 
-// ── Lead Capture & Email ──────────────────────────────────────────────────────
+// ── Lead Capture ──────────────────────────────────────────────────────────────
 function extractContactInfo(text) {
   // Extract email addresses
   const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
@@ -119,13 +119,72 @@ function extractContactInfo(text) {
   };
 }
 
-async function sendLeadEmail(leadData, conversation) {
+async function submitToHubSpot(leadData, conversation) {
+  // HubSpot form configuration from your website
+  const portalId = '23976882';
+  const formId = 'ab597dec-2f39-43fd-9fb2-194e4e8080ae';
+  
+  // Parse name into first/last
+  let firstName = '';
+  let lastName = '';
+  if (leadData.names.length > 0) {
+    const nameParts = leadData.names[0].split(' ');
+    firstName = nameParts[0] || '';
+    lastName = nameParts.slice(1).join(' ') || '';
+  }
+  
+  // Build HubSpot form fields
+  const fields = [
+    { name: 'email', value: leadData.emails[0] || '' },
+    { name: 'firstname', value: firstName },
+    { name: 'lastname', value: lastName },
+    { name: 'phone', value: leadData.phones[0] || '' },
+    { name: 'company', value: leadData.companies[0] || '' },
+    { name: 'message', value: conversation.map(m => `${m.role}: ${m.content}`).join('\n\n').substring(0, 500) }
+  ].filter(f => f.value);
+  
+  const payload = {
+    fields: fields,
+    context: {
+      pageUri: 'https://avadigitalagency.com',
+      pageName: 'Ava Digital - AI Chat Lead'
+    }
+  };
+  
+  try {
+    const response = await fetch(`https://api.hsforms.com/submissions/v3/integration/submit/${portalId}/${formId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    
+    if (response.ok) {
+      console.log('Lead submitted to HubSpot successfully');
+      return true;
+    } else {
+      const error = await response.text();
+      console.error('HubSpot submission failed:', error);
+      return false;
+    }
+  } catch (err) {
+    console.error('HubSpot error:', err);
+    return false;
+  }
+}
+
+async function sendLeadNotification(leadData, conversation) {
+  // Try HubSpot first
+  const hubSpotResult = await submitToHubSpot(leadData, conversation);
+  
+  // Also send email as backup if SendGrid is configured
   const emailTo = process.env.LEAD_EMAIL || 'glen@avadigitalagency.com';
   const sendgridKey = process.env.SENDGRID_API_KEY;
   
-  const subject = `New Lead from Ava Chat - ${leadData.names[0] || 'Website Visitor'}`;
-  
-  const emailBody = `
+  if (sendgridKey) {
+    const subject = `New Lead from Ava Chat - ${leadData.names[0] || 'Website Visitor'}`;
+    const emailBody = `
 NEW LEAD CAPTURED FROM AVA CHAT
 ================================
 
@@ -135,6 +194,8 @@ ${leadData.emails.length > 0 ? `Email: ${leadData.emails.join(', ')}` : 'Email: 
 ${leadData.phones.length > 0 ? `Phone: ${leadData.phones.join(', ')}` : 'Phone: Not provided'}
 ${leadData.companies.length > 0 ? `Company: ${leadData.companies.join(', ')}` : 'Company: Not provided'}
 
+HubSpot Submission: ${hubSpotResult ? 'SUCCESS' : 'FAILED'}
+
 FULL CONVERSATION:
 ------------------
 ${conversation.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n')}
@@ -142,44 +203,31 @@ ${conversation.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n')}
 ------------------
 Captured at: ${new Date().toISOString()}
 Source: avadigitalagency.com chat widget
-  `;
-
-  // If SendGrid is configured, use it
-  if (sendgridKey) {
+    `;
+    
     try {
-      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      await fetch('https://api.sendgrid.com/v3/mail/send', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${sendgridKey}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          personalizations: [{
-            to: [{ email: emailTo }]
-          }],
+          personalizations: [{ to: [{ email: emailTo }] }],
           from: { email: 'leads@avadigitalagency.com', name: 'Ava Chat Lead' },
           subject: subject,
-          content: [{
-            type: 'text/plain',
-            value: emailBody
-          }]
+          content: [{ type: 'text/plain', value: emailBody }]
         })
       });
-      
-      if (response.ok) {
-        console.log('Lead email sent via SendGrid');
-        return true;
-      }
     } catch (err) {
-      console.error('SendGrid error:', err);
+      console.error('Email notification failed:', err);
     }
   }
   
-  // Fallback: log to console (for debugging)
-  console.log('LEAD CAPTURED (email not sent - configure SENDGRID_API_KEY):');
-  console.log(emailBody);
-  
-  return false;
+  // Always log to console for debugging
+  console.log('LEAD CAPTURED:');
+  console.log('HubSpot:', hubSpotResult ? 'SUCCESS' : 'FAILED');
+  console.log('Contact:', leadData);
 }
 
 // ── Site Fetcher ───────────────────────────────────────────────────────────────
@@ -312,9 +360,9 @@ exports.handler = async function(event) {
     // Check for contact info in the latest message
     const contactInfo = extractContactInfo(lastUserMsg.content);
     if (contactInfo.hasContactInfo) {
-      // Send lead email asynchronously (don't block the response)
-      sendLeadEmail(contactInfo, messages).catch(err => {
-        console.error('Failed to send lead email:', err);
+      // Send lead to HubSpot and email asynchronously (don't block the response)
+      sendLeadNotification(contactInfo, messages).catch(err => {
+        console.error('Failed to send lead notification:', err);
       });
     }
   }
