@@ -1,5 +1,6 @@
 // Ava Digital — AI Chat Proxy v2
 // Features: URL site analysis, GPT-4o, strong system prompt, lead qualification
+// NEW: Email lead capture when contact info is provided
 
 // ── System Prompt ─────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are Ava — the AI marketing advisor for Ava Digital Agency, an AI-powered digital marketing agency based in Illinois. You live on avadigitalagency.com and your job is to help potential clients understand what's holding back their growth and show them how Ava can fix it.
@@ -68,6 +69,118 @@ NEVER use phrases like "lack of clear messaging", "missed opportunity to engage"
 - Always move the conversation toward booking a strategy call or submitting contact info.
 - If asked about something outside marketing: "That's outside my lane. What's your biggest marketing challenge right now?"
 - Never make up information about a website. Only comment on what's in the site data provided.`;
+
+// ── Lead Capture & Email ──────────────────────────────────────────────────────
+function extractContactInfo(text) {
+  // Extract email addresses
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const emails = text.match(emailRegex) || [];
+  
+  // Extract phone numbers (various formats)
+  const phoneRegex = /(\+?1?[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}/g;
+  const phones = text.match(phoneRegex) || [];
+  
+  // Extract name patterns ("my name is...", "I'm...", "this is...")
+  const namePatterns = [
+    /my name is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+    /i'm\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+    /this is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+    /name[\s:]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i
+  ];
+  
+  let names = [];
+  for (const pattern of namePatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      names.push(match[1]);
+    }
+  }
+  
+  // Extract company/business mentions
+  const companyPatterns = [
+    /(?:company|business|work at|work for)\s+(?:is\s+)?([A-Z][A-Za-z0-9\s&]+?)(?:\.|,|;|\s+(?:and|we|I|my))/i,
+    /(?:at|with)\s+([A-Z][A-Za-z0-9\s&]+?)(?:\.|,|;|\s+(?:and|we|looking|need))/i
+  ];
+  
+  let companies = [];
+  for (const pattern of companyPatterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      companies.push(match[1].trim());
+    }
+  }
+  
+  return {
+    hasContactInfo: emails.length > 0 || phones.length > 0 || names.length > 0,
+    emails: [...new Set(emails)],
+    phones: [...new Set(phones)],
+    names: [...new Set(names)],
+    companies: [...new Set(companies)]
+  };
+}
+
+async function sendLeadEmail(leadData, conversation) {
+  const emailTo = process.env.LEAD_EMAIL || 'glen@avadigitalagency.com';
+  const sendgridKey = process.env.SENDGRID_API_KEY;
+  
+  const subject = `New Lead from Ava Chat - ${leadData.names[0] || 'Website Visitor'}`;
+  
+  const emailBody = `
+NEW LEAD CAPTURED FROM AVA CHAT
+================================
+
+CONTACT INFORMATION:
+${leadData.names.length > 0 ? `Name: ${leadData.names.join(', ')}` : 'Name: Not provided'}
+${leadData.emails.length > 0 ? `Email: ${leadData.emails.join(', ')}` : 'Email: Not provided'}
+${leadData.phones.length > 0 ? `Phone: ${leadData.phones.join(', ')}` : 'Phone: Not provided'}
+${leadData.companies.length > 0 ? `Company: ${leadData.companies.join(', ')}` : 'Company: Not provided'}
+
+FULL CONVERSATION:
+------------------
+${conversation.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n')}
+
+------------------
+Captured at: ${new Date().toISOString()}
+Source: avadigitalagency.com chat widget
+  `;
+
+  // If SendGrid is configured, use it
+  if (sendgridKey) {
+    try {
+      const response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sendgridKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          personalizations: [{
+            to: [{ email: emailTo }]
+          }],
+          from: { email: 'leads@avadigitalagency.com', name: 'Ava Chat Lead' },
+          subject: subject,
+          content: [{
+            type: 'text/plain',
+            value: emailBody
+          }]
+        })
+      });
+      
+      if (response.ok) {
+        console.log('Lead email sent via SendGrid');
+        return true;
+      }
+    } catch (err) {
+      console.error('SendGrid error:', err);
+    }
+  }
+  
+  // Fallback: log to console (for debugging)
+  console.log('LEAD CAPTURED (email not sent - configure SENDGRID_API_KEY):');
+  console.log(emailBody);
+  
+  return false;
+}
 
 // ── Site Fetcher ───────────────────────────────────────────────────────────────
 function extractUrls(text) {
@@ -194,6 +307,15 @@ exports.handler = async function(event) {
       // Fetch the first URL found
       const siteData = await fetchSiteData(urls[0]);
       siteContext = formatSiteContext(siteData);
+    }
+    
+    // Check for contact info in the latest message
+    const contactInfo = extractContactInfo(lastUserMsg.content);
+    if (contactInfo.hasContactInfo) {
+      // Send lead email asynchronously (don't block the response)
+      sendLeadEmail(contactInfo, messages).catch(err => {
+        console.error('Failed to send lead email:', err);
+      });
     }
   }
 
