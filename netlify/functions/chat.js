@@ -1,5 +1,5 @@
 // Ava Digital — AI Chat Proxy v2
-// Features: URL site analysis, GPT-4o, strong system prompt, lead qualification
+// Features: URL site analysis, GPT-4o-mini, strong system prompt, lead qualification
 // NEW: Email lead capture when contact info is provided
 
 // ── System Prompt ─────────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ exports.handler = async function(event) {
         "Authorization": `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o",
+        model: "gpt-4o-mini",
         messages: [
           { role: "system", content: systemContent },
           ...messages.slice(-12),
